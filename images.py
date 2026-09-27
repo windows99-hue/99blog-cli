@@ -60,7 +60,11 @@ def find_local_images(post: Post, html: str) -> Dict[str, LocalImage]:
             data = local_path.read_bytes()
         except OSError as exc:
             raise PostError(f"Cannot read local image {local_path}: {exc}") from exc
-        key = os.path.relpath(local_path, post.path.parent.resolve()).replace("\\", "/")
+        try:
+            key = os.path.relpath(local_path, post.path.parent.resolve()).replace("\\", "/")
+        except ValueError:
+            # Windows cannot form a relative path between different drives.
+            key = local_path.as_posix()
         images[source] = LocalImage(key, local_path, data, hashlib.sha256(data).hexdigest(), mime_type)
     return images
 

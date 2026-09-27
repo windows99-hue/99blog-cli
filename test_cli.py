@@ -342,6 +342,24 @@ print("$not_math$")
             self.assertEqual(upload.call_count, 1)
         self.assertEqual(self.path.read_bytes(), source)
 
+    def test_image_on_another_windows_drive_can_be_uploaded_and_reused(self):
+        self.path.write_text("![photo](photo.png)\n", encoding="utf-8")
+        asset = self.path.parent / "photo.png"
+        asset.write_bytes(b"image bytes")
+        post = read_post(self.path)
+        with patch("images.os.path.relpath", side_effect=ValueError("different drives")):
+            images = find_local_images(post, post.html)
+        self.assertEqual(images["photo.png"].key, asset.resolve().as_posix())
+        config = Config("https://example.com/blog", "user", "password")
+        remote = "https://example.com/blog/wp-content/uploads/photo.png"
+        with patch("images.upload_media", return_value=(77, remote)) as upload:
+            html, cache, uploaded = replace_with_wordpress_urls(config, post.html, images, {})
+            self.assertEqual(uploaded, 1)
+            self.assertIn(f'src="{remote}"', html)
+            _, _, uploaded = replace_with_wordpress_urls(config, post.html, images, cache)
+            self.assertEqual(uploaded, 0)
+            upload.assert_called_once()
+
     def test_changed_image_uploads_again(self):
         self.path.write_text("![local](photo.png)\n", encoding="utf-8")
         asset = self.path.parent / "photo.png"
