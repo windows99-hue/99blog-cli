@@ -1,0 +1,7 @@
+clc99>=2.3
+bleach[css]>=6.4,<7
+Markdown>=3.4,<4
+pymdown-extensions>=10.20,<11
+PyYAML>=6,<7
+python-dotenv>=1,<2
+requests>=2.28,<3
