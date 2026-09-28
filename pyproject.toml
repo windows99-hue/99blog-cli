@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "99blog-cli"
-version = "0.1.1"
+version = "0.1.2"
 description = "Publish local Markdown posts to WordPress"
 requires-python = ">=3.9"
 dependencies = [
@@ -12,6 +12,7 @@ dependencies = [
   "bleach[css]>=6.4,<7",
   "Markdown>=3.4,<4",
   "pymdown-extensions>=10.20,<11",
+  "Pillow>=10.4,<13",
   "PyYAML>=6,<7",
   "python-dotenv>=1,<2",
   "requests>=2.28,<3",

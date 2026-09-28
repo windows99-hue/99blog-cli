@@ -1,6 +1,7 @@
 """99blog command-line entry point."""
 
 import argparse
+import re
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -22,14 +23,14 @@ def ask_metadata(post: Post) -> tuple:
         default_categories = ", ".join(post.categories)
         default_label = default_categories or ("keep WordPress categories" if post.wp_id else "WordPress default")
         while True:
-            entered = input(f"Categories (comma-separated; - to clear) [{default_label}]: ").strip()
+            entered = input(f"Categories (comma/semicolon-separated; - to clear) [{default_label}]: ").strip()
             if not entered:
                 categories = post.categories
                 break
             if entered == "-":
                 categories = []
                 break
-            categories = [name.strip() for name in entered.split(",") if name.strip()]
+            categories = [name.strip() for name in re.split(r"[,，;；]", entered) if name.strip()]
             if categories:
                 break
             output.warning("Enter a category name, press Enter to keep, or use - to clear")

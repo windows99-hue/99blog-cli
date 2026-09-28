@@ -1,10 +1,12 @@
 import tempfile
 import unittest
 import os
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import main
+from PIL import Image
 from config import Config, load_config
 from images import find_local_images, replace_with_wordpress_urls
 from post import PostError, read_post
@@ -94,6 +96,16 @@ print("$not_math$")
         self.assertIn("<strong>bold <em>with italic</em></strong>", html)
         self.assertIn("<del><strong>deleted bold</strong></del>", html)
         self.assertIn("<code>inline</code>", html)
+
+    def test_single_tildes_stay_literal_while_double_tildes_strike_through(self):
+        self.path.write_text(
+            "回来啦~很多啦~用起来更方便。\n\n这段文字也有~~删除线~~。\n",
+            encoding="utf-8",
+        )
+        html = read_post(self.path).html
+        self.assertIn("回来啦~很多啦~用起来更方便。", html)
+        self.assertNotIn("<sub>", html)
+        self.assertIn("<del>删除线</del>", html)
 
     def test_admonitions_and_github_callouts_survive_sanitization(self):
         self.path.write_text(
@@ -285,6 +297,14 @@ print("$not_math$")
         self.assertEqual(request.call_args.kwargs["data"], b"image bytes")
         self.assertEqual(request.call_args.kwargs["headers"]["Content-Type"], "image/png")
 
+    def test_media_upload_exposes_request_too_large_status(self):
+        response = Mock(ok=False, status_code=413, headers={"Content-Type": "text/html"})
+        response.json.side_effect = ValueError("not JSON")
+        with patch("wordpress.requests.post", return_value=response):
+            with self.assertRaises(WordPressError) as raised:
+                upload_media(Config("https://example.com/blog", "user", "password"), b"image", "image/png", "photo.png")
+        self.assertEqual(raised.exception.status_code, 413)
+
     def test_categories_reuse_exact_name_and_create_missing_name(self):
         config = Config("https://example.com/blog", "user", "password")
         existing = Mock(ok=True, status_code=200, headers={})
@@ -299,6 +319,11 @@ print("$not_math$")
         self.assertEqual(get.call_count, 2)
         post.assert_called_once()
         self.assertEqual(post.call_args.kwargs["json"], {"name": "技术"})
+
+    def test_categories_accept_semicolons_and_chinese_punctuation(self):
+        with patch("builtins.input", side_effect=["", "", "闲聊;生活；意识流，随笔"]):
+            _, _, categories = main.ask_metadata(read_post(self.path))
+        self.assertEqual(categories, ["闲聊", "生活", "意识流", "随笔"])
 
     def test_publish_sends_category_ids_and_saves_names(self):
         with patch("builtins.input", side_effect=["", "", "技术, Python"]):
@@ -359,6 +384,29 @@ print("$not_math$")
             _, _, uploaded = replace_with_wordpress_urls(config, post.html, images, cache)
             self.assertEqual(uploaded, 0)
             upload.assert_called_once()
+
+    def test_oversized_png_retries_with_smaller_jpeg_without_changing_source(self):
+        self.path.write_text("![photo](photo.png)\n", encoding="utf-8")
+        buffer = BytesIO()
+        Image.effect_noise((500, 400), 100).convert("RGB").save(buffer, format="PNG")
+        original = buffer.getvalue()
+        asset = self.path.parent / "photo.png"
+        asset.write_bytes(original)
+        post = read_post(self.path)
+        images = find_local_images(post, post.html)
+        remote = "https://example.com/blog/wp-content/uploads/converted.jpg"
+        with patch("images.upload_media", side_effect=[WordPressError("HTTP 413", 413), (77, remote)]) as upload:
+            html, cache, count = replace_with_wordpress_urls(
+                Config("https://example.com/blog", "user", "password"), post.html, images, {}
+            )
+        self.assertEqual(count, 1)
+        self.assertEqual(upload.call_count, 2)
+        self.assertEqual(upload.call_args_list[1].args[2], "image/jpeg")
+        self.assertTrue(upload.call_args_list[1].args[3].endswith(".jpg"))
+        self.assertLess(len(upload.call_args_list[1].args[1]), len(original))
+        self.assertIn(f'src="{remote}"', html)
+        self.assertEqual(cache["photo.png"]["id"], 77)
+        self.assertEqual(asset.read_bytes(), original)
 
     def test_changed_image_uploads_again(self):
         self.path.write_text("![local](photo.png)\n", encoding="utf-8")

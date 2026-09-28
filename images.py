@@ -6,14 +6,16 @@ import os
 import re
 from dataclasses import dataclass
 from html import escape, unescape
+from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import unquote, urlsplit
 from urllib.request import url2pathname
 
 from config import Config
+import output
 from post import Post, PostError
-from wordpress import upload_media
+from wordpress import WordPressError, upload_media
 
 
 IMG_TAG = re.compile(r"<img\b[^>]*>", re.I)
@@ -89,7 +91,34 @@ def replace_with_wordpress_urls(config: Config, html: str, images: Dict[str, Loc
         if not re.fullmatch(r"\.[a-z0-9]{1,8}", extension):
             raise PostError(f"Unsupported image filename extension: {image.path.name}")
         filename = f"99blog-{image.sha256[:20]}{extension}"
-        media_id, url = upload_media(config, image.data, image.mime_type, filename)
+        try:
+            media_id, url = upload_media(config, image.data, image.mime_type, filename)
+        except WordPressError as exc:
+            if exc.status_code != 413:
+                raise
+            variant = _smaller_upload_copy(image)
+            if variant is None:
+                raise WordPressError(
+                    f"Image {image.path.name} ({len(image.data) / 1048576:.2f} MiB) exceeds the server upload limit (HTTP 413). "
+                    "Use a smaller image or raise the server request-body limit.", 413
+                ) from exc
+            smaller_data, smaller_mime, smaller_extension = variant
+            output.warning(
+                f"Image {image.path.name} exceeded the server upload limit; "
+                f"retrying with a {len(smaller_data) / 1024:.0f} KiB {smaller_extension[1:].upper()} copy"
+            )
+            try:
+                media_id, url = upload_media(
+                    config, smaller_data, smaller_mime,
+                    f"99blog-{image.sha256[:20]}{smaller_extension}",
+                )
+            except WordPressError as retry_exc:
+                if retry_exc.status_code == 413:
+                    raise WordPressError(
+                        f"Image {image.path.name} still exceeds the server upload limit after compression (HTTP 413). "
+                        "Raise the server request-body limit or resize the image.", 413
+                    ) from retry_exc
+                raise
         cache[image.key] = {"sha256": image.sha256, "id": media_id, "url": url}
         urls[image.key] = url
         uploaded += 1
@@ -106,6 +135,46 @@ def replace_with_wordpress_urls(config: Config, html: str, images: Dict[str, Loc
         return tag[:src.start(3)] + escape(urls[image.key], quote=True) + tag[src.end(3):]
 
     return IMG_TAG.sub(replace_tag, html), cache, uploaded
+
+
+def _smaller_upload_copy(image: LocalImage) -> Optional[Tuple[bytes, str, str]]:
+    """Keep the local original and prepare a smaller upload after HTTP 413."""
+    if image.mime_type not in ("image/png", "image/jpeg"):
+        return None
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    target_bytes = min(900 * 1024, max(64 * 1024, int(len(image.data) * 0.7)))
+    try:
+        with Image.open(BytesIO(image.data)) as original:
+            if getattr(original, "is_animated", False):
+                return None
+            picture = ImageOps.exif_transpose(original)
+            has_alpha = "A" in picture.getbands() or "transparency" in picture.info
+            if has_alpha:
+                if image.mime_type != "image/png":
+                    return None
+                picture = picture.convert("RGBA")
+                format_name, mime, extension = "PNG", "image/png", ".png"
+            else:
+                picture = picture.convert("RGB")
+                format_name, mime, extension = "JPEG", "image/jpeg", ".jpg"
+            width, height = picture.size
+            for scale in (1, 0.85, 0.7, 0.55, 0.4):
+                candidate = picture.copy()
+                if scale < 1:
+                    candidate.thumbnail((max(1, int(width * scale)), max(1, int(height * scale))), Image.Resampling.LANCZOS)
+                for quality in ((92, 85, 75) if format_name == "JPEG" else (None,)):
+                    buffer = BytesIO()
+                    settings = {"optimize": True}
+                    if quality is not None:
+                        settings["quality"] = quality
+                    candidate.save(buffer, format=format_name, **settings)
+                    data = buffer.getvalue()
+                    if len(data) < target_bytes and len(data) < len(image.data):
+                        return data, mime, extension
+    except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError):
+        return None
+    return None
 
 
 def _usable_url(value: Any) -> bool:

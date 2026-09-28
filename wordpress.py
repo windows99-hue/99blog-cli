@@ -11,7 +11,9 @@ from sanitize import sanitize_html
 
 
 class WordPressError(RuntimeError):
-    pass
+    def __init__(self, message: str, status_code: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def _request(config: Config, method: str, route: str, **kwargs: Any) -> requests.Response:
@@ -43,10 +45,10 @@ def _response_json(response: requests.Response, missing_post_id: Optional[int] =
         except ValueError:
             pass
         if response.status_code in (401, 403):
-            raise WordPressError(f"WordPress returned HTTP {response.status_code} (check Application Password and permissions){detail}")
+            raise WordPressError(f"WordPress returned HTTP {response.status_code} (check Application Password and permissions){detail}", response.status_code)
         if response.status_code == 404 and missing_post_id is not None:
-            raise WordPressError(f"WordPress post #{missing_post_id} was not found (HTTP 404); wp_id was kept unchanged{detail}")
-        raise WordPressError(f"WordPress returned HTTP {response.status_code}{detail}")
+            raise WordPressError(f"WordPress post #{missing_post_id} was not found (HTTP 404); wp_id was kept unchanged{detail}", response.status_code)
+        raise WordPressError(f"WordPress returned HTTP {response.status_code}{detail}", response.status_code)
     try:
         return response.json()
     except ValueError as exc:

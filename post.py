@@ -38,6 +38,7 @@ class Post:
             extensions=["fenced_code", "tables", "md_in_html", "admonition", "pymdownx.quotes", "pymdownx.arithmatex", "pymdownx.tilde"],
             extension_configs={
                 "pymdownx.quotes": {"callouts": True},
+                "pymdownx.tilde": {"subscript": False, "smart_delete": False},
                 "pymdownx.arithmatex": {
                     "generic": True,
                     "preview": False,
