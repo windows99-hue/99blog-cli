@@ -16,6 +16,17 @@ class PostError(ValueError):
     pass
 
 
+WINDOWS_IMAGE_DEST = re.compile(r"(!\[[^\]\n]*\]\()([a-zA-Z]:\\[^)\n]+)(\))")
+
+
+def _normalize_windows_image_paths(body: str) -> str:
+    """Keep Markdown from treating a Windows separator before # as an escape."""
+    return WINDOWS_IMAGE_DEST.sub(
+        lambda match: match.group(1) + match.group(2).replace("\\", "/") + match.group(3),
+        body,
+    )
+
+
 @dataclass
 class Post:
     path: Path
@@ -34,7 +45,7 @@ class Post:
     @property
     def html(self) -> str:
         html = markdown.markdown(
-            _separate_math_blocks(self.body),
+            _separate_math_blocks(_normalize_windows_image_paths(self.body)),
             extensions=["fenced_code", "tables", "md_in_html", "admonition", "pymdownx.quotes", "pymdownx.arithmatex", "pymdownx.tilde"],
             extension_configs={
                 "pymdownx.quotes": {"callouts": True},

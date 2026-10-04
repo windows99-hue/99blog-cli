@@ -385,6 +385,21 @@ print("$not_math$")
             self.assertEqual(uploaded, 0)
             upload.assert_called_once()
 
+    def test_windows_image_path_before_hash_keeps_directory_separator(self):
+        asset = self.path.parent / "#1：重拾神经网络.assets" / "photo.png"
+        asset.parent.mkdir()
+        asset.write_bytes(b"image bytes")
+        source = f"![photo]({asset})\n"
+        self.path.write_text(source, encoding="utf-8")
+
+        post = read_post(self.path)
+        images = find_local_images(post, post.html)
+
+        self.assertIn(asset.as_posix(), post.html)
+        self.assertEqual(len(images), 1)
+        self.assertEqual(next(iter(images.values())).path, asset.resolve())
+        self.assertEqual(self.path.read_text(encoding="utf-8"), source)
+
     def test_oversized_png_retries_with_smaller_jpeg_without_changing_source(self):
         self.path.write_text("![photo](photo.png)\n", encoding="utf-8")
         buffer = BytesIO()
