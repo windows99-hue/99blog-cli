@@ -148,6 +148,69 @@ print("$not_math$")
         self.assertIn('class="language-text">$$\nnot math\n$$', html)
         self.assertEqual(self.path.read_text(encoding="utf-8"), source)
 
+    def test_display_math_preserves_blank_lines_and_matrix_row_separators(self):
+        tex = r"""Wx+b =
+\begin{bmatrix}
+w_{11}&w_{12}\\
+w_{21}&w_{22}
+\end{bmatrix}\\
+\\
+
+= \begin{bmatrix}z_1\\z_2\end{bmatrix}
+"""
+        for opening, closing in [("$$", "$$"), (r"\[", r"\]")]:
+            with self.subTest(opening=opening):
+                source = f"展开看看呢\n{opening}\n{tex}{closing}\n后续文字\n"
+                self.path.write_text(source, encoding="utf-8")
+                html = sanitize_html(read_post(self.path).html)
+                self.assertIn(
+                    '<div class="katex math multi-line">\n' + tex.replace("&", "&amp;") + '</div>',
+                    html,
+                )
+                self.assertEqual(html.count('class="katex math multi-line"'), 1)
+                self.assertIn("<p>后续文字</p>", html)
+                self.assertNotIn(opening, html)
+                self.assertEqual(self.path.read_text(encoding="utf-8"), source)
+
+    def test_display_math_inside_quotes_is_separated_from_adjacent_text(self):
+        for prefix in ["> ", "> > "]:
+            with self.subTest(prefix=prefix):
+                source = "\n".join(prefix + line for line in [
+                    "式子变成", "$$", r"\delta^T=\begin{bmatrix}\delta_1&\delta_2\end{bmatrix}\\",
+                    "", r"\delta^T x", "$$", "这个矩阵乘法能算吗？",
+                ])
+                self.path.write_text(source, encoding="utf-8")
+                html = sanitize_html(read_post(self.path).html)
+                self.assertEqual(html.count("<blockquote>"), prefix.count(">"))
+                self.assertIn('<div class="katex math multi-line">', html)
+                self.assertIn(r"\end{bmatrix}\\" + "\n\n" + r"\delta^T x", html)
+                self.assertIn("<p>这个矩阵乘法能算吗？</p>", html)
+                self.assertNotIn("$$", html)
+
+    def test_math_protection_leaves_fenced_and_indented_code_literal(self):
+        source = '```text\n$$\nx\\\\\n\ny\n$$\n```\n\n    $$\n    x\n    $$\n'
+        self.path.write_text(source, encoding="utf-8")
+        html = read_post(self.path).html
+        self.assertNotIn('class="katex math multi-line"', html)
+        self.assertIn('class="language-text">$$\nx\\\\\n\ny\n$$', html)
+        self.assertIn('<pre><code>$$\nx\n$$\n</code></pre>', html)
+
+    def test_unclosed_math_does_not_swallow_following_markdown(self):
+        self.path.write_text('> $$\n> x\n\n# Heading\n\n**bold**\n', encoding="utf-8")
+        html = read_post(self.path).html
+        self.assertNotIn('class="katex math multi-line"', html)
+        self.assertIn("$$", html)
+        self.assertIn("<h1>Heading</h1>", html)
+        self.assertIn("<strong>bold</strong>", html)
+
+    def test_display_math_escapes_html_before_publishing(self):
+        self.path.write_text('$$\nx<y\n>0\n\n<script>alert(1)</script>\n$$\n', encoding="utf-8")
+        html = sanitize_html(read_post(self.path).html)
+        self.assertIn("x&lt;y", html)
+        self.assertIn("\n&gt;0\n", html)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+        self.assertNotIn("<script>", html)
+
     def test_first_publish_writes_id_then_updates_same_post(self):
         with patch("main.load_config", return_value=Config("https://example.com/blog", "user", "password")):
             with patch("main.publish_post", return_value=(123, "https://example.com/blog/test")) as publish:

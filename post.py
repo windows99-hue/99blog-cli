@@ -5,11 +5,14 @@ import re
 import stat
 import tempfile
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import markdown
 import yaml
+from markdown.extensions import Extension
+from markdown.preprocessors import Preprocessor
 
 
 class PostError(ValueError):
@@ -45,8 +48,8 @@ class Post:
     @property
     def html(self) -> str:
         html = markdown.markdown(
-            _separate_math_blocks(_normalize_windows_image_paths(self.body)),
-            extensions=["fenced_code", "tables", "md_in_html", "admonition", "pymdownx.quotes", "pymdownx.arithmatex", "pymdownx.tilde"],
+            _normalize_windows_image_paths(self.body),
+            extensions=["fenced_code", "tables", "md_in_html", "admonition", "pymdownx.quotes", "pymdownx.arithmatex", "pymdownx.tilde", _MathBlockExtension()],
             extension_configs={
                 "pymdownx.quotes": {"callouts": True},
                 "pymdownx.tilde": {"subscript": False, "smart_delete": False},
@@ -140,31 +143,72 @@ def read_post(path: Path) -> Post:
     return Post(path, original, data, body, title.strip() or path.stem, status, categories, wp_media, wp_id, newline, bom, has_front_matter)
 
 
-def _separate_math_blocks(body: str) -> str:
-    """Give standalone math delimiters block boundaries without changing source Markdown."""
-    lines = body.splitlines(keepends=True)
-    newline = "\r\n" if "\r\n" in body else "\n"
-    result = []
-    fence = None
-    math_end = None
-    for index, line in enumerate(lines):
-        stripped = line.strip()
-        code_fence = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
-        if code_fence and math_end is None:
-            marker = code_fence.group(1)
-            if fence is None:
-                fence = (marker[0], len(marker))
-            elif marker[0] == fence[0] and len(marker) >= fence[1] and not line[code_fence.end():].strip():
+class _MathBlockExtension(Extension):
+    def extendMarkdown(self, md):
+        # Run after fenced code is protected, before HTML and paragraph splitting.
+        md.preprocessors.register(_MathBlockPreprocessor(md), "99blog-math-blocks", 24)
+
+
+class _MathBlockPreprocessor(Preprocessor):
+    """Protect complete display formulas, including blank lines and quote prefixes."""
+
+    QUOTE_PREFIX = re.compile(r"^(?: {0,3}> ?)*")
+    QUOTE_MARKER = re.compile(r"^ {0,3}> ?")
+    DELIMITER = re.compile(r"^ {0,3}(\$\$|\\\[|\\\])[ \t]*$")
+    FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
+    def run(self, lines):
+        result = []
+        fence = None
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            prefix = self.QUOTE_PREFIX.match(line).group()
+            depth = prefix.count(">")
+            content = line[len(prefix):]
+            code_fence = self.FENCE.match(content)
+            if fence is not None and depth != fence[2]:
                 fence = None
-        if fence is None and math_end is None and (stripped == "$$" or stripped == r"\[") and len(line) - len(line.lstrip(" ")) <= 3:
-            if result and result[-1].strip():
-                result.append(newline)
-            math_end = "$$" if stripped == "$$" else r"\]"
-        elif math_end is not None and stripped == math_end:
-            math_end = None
+            if code_fence:
+                marker = code_fence.group(1)
+                if fence is None:
+                    fence = (marker[0], len(marker), depth)
+                elif marker[0] == fence[0] and len(marker) >= fence[1] and not content[code_fence.end():].strip():
+                    fence = None
+                result.append(line)
+                index += 1
+                continue
+            opening = self.DELIMITER.match(content) if fence is None else None
+            if opening and opening.group(1) in ("$$", r"\["):
+                closing = "$$" if opening.group(1) == "$$" else r"\]"
+                math_lines = []
+                matched = False
+                end = index + 1
+                while end < len(lines):
+                    math_line = lines[end]
+                    quote_depth = 0
+                    for _ in range(depth):
+                        quote = self.QUOTE_MARKER.match(math_line)
+                        if quote is None:
+                            break
+                        math_line = math_line[quote.end():]
+                        quote_depth += 1
+                    if quote_depth != depth and math_line.strip():
+                        break
+                    delimiter = self.DELIMITER.match(math_line)
+                    if delimiter and delimiter.group(1) == closing:
+                        tex = "\n" + "\n".join(math_lines) + "\n"
+                        placeholder = self.md.htmlStash.store(
+                            '<div class="katex math multi-line">' + escape(tex, quote=False) + '</div>'
+                        )
+                        result.extend([prefix.rstrip(), prefix + placeholder, prefix.rstrip()])
+                        index = end + 1
+                        matched = True
+                        break
+                    math_lines.append(math_line)
+                    end += 1
+                if matched:
+                    continue
             result.append(line)
-            if index + 1 < len(lines) and lines[index + 1].strip():
-                result.append(newline)
-            continue
-        result.append(line)
-    return "".join(result)
+            index += 1
+        return result
