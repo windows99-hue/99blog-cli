@@ -30,6 +30,13 @@ def _normalize_windows_image_paths(body: str) -> str:
     )
 
 
+def _format_fenced_code(source, language, class_name, options, md, **kwargs):
+    """Keep the site's code markup while SuperFences handles nested containers."""
+    language_attr = f' class="language-{escape(language, quote=True)}"' if language else ""
+    code = escape(source + "\n", quote=False).replace('"', "&quot;")
+    return f"<pre><code{language_attr}>{code}</code></pre>"
+
+
 @dataclass
 class Post:
     path: Path
@@ -49,8 +56,11 @@ class Post:
     def html(self) -> str:
         html = markdown.markdown(
             _normalize_windows_image_paths(self.body),
-            extensions=["fenced_code", "tables", "md_in_html", "admonition", "pymdownx.quotes", "pymdownx.arithmatex", "pymdownx.tilde", _MathBlockExtension()],
+            extensions=["pymdownx.superfences", "tables", "md_in_html", "admonition", "pymdownx.quotes", "pymdownx.arithmatex", "pymdownx.tilde", _MathBlockExtension()],
             extension_configs={
+                "pymdownx.superfences": {
+                    "custom_fences": [{"name": "*", "class": "", "format": _format_fenced_code}],
+                },
                 "pymdownx.quotes": {"callouts": True},
                 "pymdownx.tilde": {"subscript": False, "smart_delete": False},
                 "pymdownx.arithmatex": {

@@ -148,6 +148,66 @@ print("$not_math$")
         self.assertIn('class="language-text">$$\nnot math\n$$', html)
         self.assertEqual(self.path.read_text(encoding="utf-8"), source)
 
+    def test_quoted_error_and_forward_method_are_complete_code_blocks(self):
+        error = "ValueError: non-broadcastable output operand with shape (1,1) doesn't match the broadcast shape (1,2)\n"
+        forward = (
+            "    def forward(self, x):\n"
+            "        x = np.asarray(x, dtype=float).reshape(-1, 1)\n"
+            "        self.x = x\n\n"
+            "        # 按照矩阵乘法公式\n"
+            "        self.z = self.W @ x + self.b\n\n"
+            "        # 激活函数\n"
+            "        self.haty = self.leaky_ReLU(self.z)\n\n"
+            "        return self.haty\n"
+        )
+        quoted = (
+            "这里我还踩了个坑，\n\n~~~python\n" + error + "~~~\n\n"
+            "因为我还是用的列表，没有用`numpy`的矩阵\n\n"
+            "需要转换一下\n\n`Layer`的`forward`\n\n~~~python\n" + forward + "~~~\n"
+        )
+        source = "正文\n\n" + "\n".join("> " + line for line in quoted.splitlines()) + "\n\n实例化：\n"
+        self.path.write_text(source, encoding="utf-8")
+        html = sanitize_html(read_post(self.path).html)
+        quote = html.split("<blockquote>\n", 1)[1].split("\n</blockquote>", 1)[0]
+        self.assertIn('<pre><code class="language-python">' + error + '</code></pre>', quote)
+        self.assertIn('<pre><code class="language-python">' + forward + '</code></pre>', quote)
+        self.assertEqual(quote.count("<pre>"), 2)
+        self.assertIn('<p>需要转换一下</p>', quote)
+        self.assertIn('<p><code>Layer</code>的<code>forward</code></p>', quote)
+        self.assertNotIn("~~~", html)
+        self.assertNotIn("&lt;p&gt;", html)
+        self.assertIn('<p>实例化：</p>', html)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), source)
+
+    def test_nested_quoted_code_keeps_math_and_html_literal(self):
+        for fence in ["~~~", "````"]:
+            with self.subTest(fence=fence):
+                source = '\n'.join('> > ' + line for line in [
+                    fence + 'text', '$$', r'\frac{a}{b}', '', '$$',
+                    '<script>alert(1)</script>', '**literal**', '```', fence,
+                ])
+                self.path.write_text(source, encoding="utf-8")
+                html = sanitize_html(read_post(self.path).html)
+                self.assertEqual(html.count('<blockquote>'), 2)
+                self.assertEqual(html.count('<pre>'), 1)
+                self.assertIn('class="language-text">$$\n' + r'\frac{a}{b}' + '\n\n$$\n', html)
+                self.assertIn('&lt;script&gt;alert(1)&lt;/script&gt;', html)
+                self.assertIn('**literal**\n```\n</code>', html)
+                self.assertNotIn('class="katex math', html)
+                self.assertNotIn('<script>', html)
+
+    def test_code_blocks_inside_lists_and_callouts_keep_language_classes(self):
+        self.path.write_text(
+            '- item\n\n    ~~~mermaid\n    flowchart TD\n        A --> B\n    ~~~\n\n'
+            '> [!WARNING]\n>\n> ~~~diff\n> -old\n> +new\n> ~~~\n',
+            encoding="utf-8",
+        )
+        html = sanitize_html(read_post(self.path).html)
+        self.assertIn('<pre><code class="language-mermaid">flowchart TD\n    A --&gt; B\n</code></pre>', html)
+        self.assertIn('<div class="admonition warning">', html)
+        self.assertIn('<pre><code class="language-diff">-old\n+new\n</code></pre>', html)
+        self.assertNotIn('~~~', html)
+
     def test_display_math_preserves_blank_lines_and_matrix_row_separators(self):
         tex = r"""Wx+b =
 \begin{bmatrix}
